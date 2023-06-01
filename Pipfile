@@ -13,6 +13,7 @@ opencv-python-headless = "*"
 streamlit-image-coordinates = "*"
 scikit-learn = "*"
 streamlit-chat = "*"
+streamlit_option_menu = "*"
 
 [dev-packages]
 

@@ -12,27 +12,15 @@ import cv2
 from streamlit_chat import message
 import openai
 import threading
+from streamlit_option_menu import option_menu
 from streamlit_image_coordinates import streamlit_image_coordinates
+import random
 
 stability_engine_id = "stable-diffusion-xl-beta-v2-2-2"
 stability_api_host = os.getenv('API_HOST', 'https://api.stability.ai')
 stability_api_key = os.getenv("STABILITY_API_KEY")
 openai.api_key = os.getenv("OPENAI_API_KEY")
-openai_model_id = os.getenv("OPENAI_MODEL_ID") 
-
-
-class openAiChatThread(threading.Thread):
-    def __init__(self, prompt):
-        threading.Thread.__init__(self)
-        self.prompt = prompt
-        self.resp = ""
-
-    def run(self):
-        completionResponse = openai.Completion.create(
-            model=openai_model_id,
-            prompt=self.prompt,
-            max_tokens=50)
-        self.resp = completionResponse.choices[0].text
+openai_model_id = os.getenv("OPENAI_MODEL_ID")
 
 
 @st.cache_data(show_spinner='')
@@ -43,10 +31,11 @@ def auto_canny(image, sigma=0.33):
     upper = int(min(255, (1.0 + sigma) * v))
     edges = cv2.Canny(blurred, lower, upper)
 
-    edges = 255 - edges 
+    edges = 255 - edges
     # to increase contrast
     edges = cv2.createCLAHE().apply(edges)
     return edges
+
 
 @st.cache_data(show_spinner="Generating drawing...")
 def getImageFromText(prompt: str):
@@ -84,6 +73,8 @@ def getImageFromText(prompt: str):
     return base64.b64decode(im["base64"])
 
 # image is an np array
+
+
 @st.cache_data(show_spinner='')
 def getKMeans(image, number_of_colors):
     modified_image = image.reshape(image.shape[0]*image.shape[1], 3)
@@ -98,89 +89,57 @@ def getKMeans(image, number_of_colors):
     return labels, clusters, np.array(clf.cluster_centers_, dtype='uint8')
 
 
-@st.cache_data(show_spinner='Generating suggestions for your artwork')
-def getCompletions(prompts):
-    reqThreads = []
-    for p in prompts:
-        t = openAiChatThread(p)
-        t.start()
-        reqThreads.append(t)
+@st.cache_data(show_spinner='Generating suggestions for your coloring session')
+def get_completions(prompt: str):
+    completionResponse = openai.Completion.create(
+        model=openai_model_id, prompt=prompt.lower()+" ->", max_tokens=30, n=3)
 
     comps = []
-    for t in reqThreads:
-        t.join()
-        comps.append(t.resp.split(".")[0] + ".")
+    for c in completionResponse.choices:
+        comps.append(c.text.split(".")[0] + ".") 
     return comps
 
 
-def user_msg_callback(key: str):
-    if st.session_state[key]: 
-      st.session_state.messages.append({"role": "user", "content": st.session_state[key]})
-      # remove last user message placeholder
-      st.session_state.user_msg_placeholders[-1].empty()
+def loadImage(prompt: str):
+    image = Image.open(io.BytesIO(getImageFromText(prompt)))
+    clustered = np.array(image)
+    st.session_state.orig_shape = clustered.shape
+    labels, clusters, cluster_centers = getKMeans(clustered, 10)
+    st.session_state.color_labels = labels
+    st.session_state.color_clusters = clusters
+    st.session_state.cluster_centers = cluster_centers
 
-      st.session_state.show_user_text_input = False
-      
-      # show image to color
-      image = Image.open(io.BytesIO(getImageFromText(st.session_state[key])))
-      clustered = np.array(image)
-      st.session_state.orig_shape = clustered.shape
-      labels, clusters, cluster_centers = getKMeans(clustered, 10)
-      st.session_state.color_labels = labels
-      st.session_state.color_clusters = clusters
-      st.session_state.cluster_centers = cluster_centers
-      gs_image = image.convert('L')
-      image_to_color = auto_canny(np.array(gs_image))
-      image_to_color = cv2.cvtColor(image_to_color, cv2.COLOR_GRAY2RGB)
-      image_to_color_flattened = image_to_color.reshape((-1, 3))
-      st.session_state.image_to_color_flattened = image_to_color_flattened
-      st.session_state.colored_regions = set()
-      st.session_state.coords = None
-      st.session_state.num_images_generated += 1
+    gs_image = image.convert('L')
+    image_to_color = auto_canny(np.array(gs_image))
+    image_to_color = cv2.cvtColor(image_to_color, cv2.COLOR_GRAY2RGB)
+    st.session_state.image_to_color_flattened = image_to_color.reshape((-1, 3))
+    st.session_state.colored_regions = set()
+    st.session_state.coords = None
+    st.session_state.num_images_generated += 1
 
 
-def themeCallback():
+def prompt_callback(key: str):
+    loadImage(st.session_state[key])
 
-    # remove the image from memory, because it will be displayed gaian, which we dont want
+
+def theme_callback(key: str):
+    st.session_state.messages.append(
+        {"role": "user", "content": st.session_state[key]})
+    st.session_state.messages.append(
+        {"role": "assistant", "content": "Here are a few suggestions for the content of your artwork."})
+    st.session_state.messages.append(
+        {"role": "prompt_options", "content": get_completions(st.session_state[key])})
+
+
+def start_session():
+    # remove the image from memory, because it will be displayed again, which we dont want
     st.session_state.pop('image_to_color_flattened', None)
+    
+    st.session_state.messages.append(
+        {"role": "assistant", "content": "For your new session I have a few suggestions for a theme that you can explore"})
+    st.session_state.messages.append(
+        {"role": "theme_options", "content": themes})
 
-    if st.session_state.theme:
-        st.session_state.messages.append({"role": "user", "content": st.session_state.theme})
-        comps = getCompletions(
-            generatePromptsFromTheme(st.session_state.theme))
-        for c in comps:
-            if "your" in c:
-                comps.remove(c)
-        if len(comps) > 5:
-            comps = random.sample(comps, 5)
-
-        st.session_state.messages.append(
-            {"role": "assistant", "content": "Here are some suggestions for the content of your artwork. You can either copy and paste one of these or input an entirely new artwork description."})
-        for i, c in enumerate(comps):
-            st.session_state.messages.append(
-                {"role": "assistant", "content": str(i+1) + ". " + c})
-        st.session_state["show_user_text_input"] = True
-
-
-def generatePromptsFromTheme(theme: Str):
-    # each context is a prefix and an optional example intended to be used after the theme
-
-    contexts = [("Create an abstract artwork that represents",), ("Paint a self-portrait that reflects",), ("Draw a nature scene that represents", "such as a serene forest or a calming beach"),
-                ("Create a visual representation of", "incorporating images and words that inspire you"), (
-                    "Draw a mandala and fill it with patterns and colors that represents", ),
-                ("Create a mixed media artwork using magazine cutouts, photographs, and paint to express",), (
-                    "Draw a still life arrangement of objects representing", "capturing their details and textures"),
-                ("Create artwork that illustrates", "combining images, colors, and words to create a visual representation.")]
-
-    prompts = []
-    for c in contexts:
-        if len(c) == 1:
-            p = c[0] + " " + theme + "."
-        else:
-            p = c[0] + " " + theme + ", " + c[1] + "."
-        prompts.append(p)
-
-    return prompts
 
 st.set_page_config(
     page_title="Arther",
@@ -190,64 +149,75 @@ st.set_page_config(
 st.sidebar.markdown('<p class="font">Arther</p>', unsafe_allow_html=True)
 with st.sidebar.expander("About Arther"):
     st.write("""
-      Arther is a coloring app that generates a soothing artwork for you to color          
+      Arther is a coloring app that generates a soothing artwork for you to color.          
      """)
 
 
+st.sidebar.button('Start session', key='start_session',
+                  type="primary", on_click=start_session)
 
-themes = ['', 'your current emotions', 'your inner state', 'a sense of peace and tranquility', 'your goals and aspirations', 'a recent challenge you have overcome',
-          'a fear or anxiety you are currently experiencing', 'a significant life event or transition you have been through', 'positive affirmation or mantra that inspires and uplifts you']
-sIdx = 0
-if "theme" in st.session_state:
-    sIdx = themes.index(st.session_state.theme)
-st.sidebar.selectbox('themes', index=sIdx, options=themes,
-                     key="theme", on_change=themeCallback)
+themes = ['Nature and Landscapes', 'Mandalas and Geometric Patterns',
+          'Fantasy and Mythology', 'Animals and Wildlife', 'Seasons and Holidays', 'Abstract and Psychedelic Art',
+          'Artistic Styles and Art History', 'Cultural and Ethnic Art']
 
 if 'messages' not in st.session_state:
     st.session_state.messages = [
-        {"role": "assistant", "content": "Welcome to Arther!"},
-        {"role": "assistant", "content": "To get started please select a theme that you'd like to explore in today's session!"}
+        {"role": "assistant",
+            "content": "Welcome to Arther! Your own personalized coloring book!"},
+        {"role": "assistant", "content": "To start a coloring session, press the \'Start session\' button in the sidebar"}
     ]
     st.session_state.num_images_history = 0
     st.session_state.num_images_generated = 0
 
-if 'user_msg_placeholders' not in st.session_state:
-    st.session_state.user_msg_placeholders = []
-
 for i, m in enumerate(st.session_state['messages']):
     if m["role"] == "image":
-      st.image(m["content"])
+        st.image(m["content"])
+    elif m["role"] == "theme_options":
+        option_menu(None, m["content"], on_change=theme_callback,
+                    key=str(i) + '_theme_options')
+    elif m["role"] == "prompt_options":
+        option_menu(None, m["content"], on_change=prompt_callback, key=str(
+            i) + '_prompt_options')
     else:
-      message(m["content"], is_user=True if m["role"] == "user" else False, key=str(i) + '_chat')
+        message(m["content"], is_user=True if m["role"] ==
+                "user" else False, key=str(i) + '_chat')
 
-# render user input text box
-if "show_user_text_input" in st.session_state and st.session_state.show_user_text_input:
-    user_msg_placeholder = st.empty()
-    with user_msg_placeholder.container():
-        key = "user_msg_" + str(len(st.session_state.messages))
-        st.text_input(key, key=key, on_change=user_msg_callback,
-                      args=(key,), label_visibility="hidden")
-    st.session_state.user_msg_placeholders.append(user_msg_placeholder)
-
-
+imageCursorJs = f"""
+<script>
+    function scroll(dummy_var_to_force_repeat_execution){{
+        iFrames = parent.document.querySelectorAll('iframe')
+        for (let i = 0; i < iFrames.length; i++) {{
+            images = iFrames[i].contentDocument.body.querySelectorAll('img')
+            for (let j = 0; j < images.length; j++) {{
+              images[j].style.cursor = 'crosshair'
+            }}
+        }}
+    }}
+    scroll({random.random()})
+</script>
+"""
 if 'image_to_color_flattened' in st.session_state:
     image_to_color_flattened = st.session_state.image_to_color_flattened
     image = Image.fromarray(
         image_to_color_flattened.reshape(st.session_state.orig_shape))
     streamlit_image_coordinates(image, key="coords")
+    st.components.v1.html(imageCursorJs)
     col_progress = int(
         100*(len(st.session_state.colored_regions)/len(st.session_state.color_clusters)))
     st.progress(col_progress, text=f'{col_progress}% completed')
     if col_progress >= 100:
         st.balloons()
         if st.session_state.num_images_history < st.session_state.num_images_generated:
-          st.session_state.messages.append({"role": "image", "content": image})
-          st.session_state.num_images_history += 1
-          congrats_msg = "Congratulations!! You have completed a coloring challenge. You can start another one by picking a different theme from the sidebar"
-          message(congrats_msg, is_user=False)
-          st.session_state.messages.append({"role": "assistent", "content": congrats_msg})
+            st.session_state.messages.append(
+                {"role": "image", "content": image})
+            st.session_state.num_images_history += 1
+            congrats_msg = "Congratulations!! You have completed a coloring session. You can start another one clicking 'Start session' from the sidebar"
+            message(congrats_msg, is_user=False)
+            st.session_state.messages.append(
+                {"role": "assistent", "content": congrats_msg})
     elif st.session_state.coords:
-        idx = st.session_state.coords["y"]*st.session_state.orig_shape[0] + st.session_state.coords["x"]
+        idx = st.session_state.coords["y"] * \
+            st.session_state.orig_shape[0] + st.session_state.coords["x"]
         if st.session_state.color_labels[idx] not in st.session_state.colored_regions:
             pixels = st.session_state.color_clusters[st.session_state.color_labels[idx]]
             for pIdx in pixels:
