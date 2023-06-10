@@ -14,6 +14,8 @@ streamlit-image-coordinates = "*"
 scikit-learn = "*"
 streamlit-chat = "*"
 streamlit_option_menu = "*"
+langchain = "*"
+stability-sdk = "*"
 
 [dev-packages]
 
