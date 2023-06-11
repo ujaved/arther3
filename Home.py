@@ -24,8 +24,8 @@ openai_model_id = os.getenv("OPENAI_MODEL_ID")
 stability_api = Context(host='grpc.stability.ai:443', api_key=stability_api_key,
                         generate_engine_id=stability_engine_id)
 
-congrats_msg = "Congratulations! You have completed an Arther paint session. \
-    On the left is the sketch you painted, and on the right is the original painting. \
+congrats_msg = "Congratulations! You have completed an Arther coloring session. \
+    On the left is the sketch you colored, and on the right is the original drawing. \
     You can start another session by clicking 'Start session' from the sidebar."
 
 themes = ['Nature and Landscapes', 'Mandalas and Geometric Patterns',
@@ -188,7 +188,7 @@ def prompt_callback(key: str):
         hex = "#{:02x}{:02x}{:02x}".format(c[0], c[1], c[2])
         cluster_colors_hex.append(hex)
     st.session_state.session_tabs[tab_idx].messages.append(
-        {'role': 'assistant', 'content': 'To paint the sketch, select a color from the color-picker just below the image, and click on an uncolored \
+        {'role': 'assistant', 'content': 'To color the sketch, select a color from the color-picker just below the image, and click on an uncolored \
             region in the sketch. This will fill all the regions that share the color with the clicked point.'})
     st.session_state.session_tabs[tab_idx].messages.append(
         {'role': 'color_options', 'content': cluster_colors_hex})
@@ -345,16 +345,16 @@ def main():
     st.set_page_config(page_title="Arther", page_icon="👋")
     st.sidebar.header('Arther')
     st.sidebar.write(
-        'Arther is an AI-powered paint-by-click app that generates a thematic sketch and segments it into regions \
+        'Arther is an AI-powered color-by-click app that generates a thematic sketch and segments it into regions \
     of identical colors. The user can then fill each region with their selected colors. Upon completion Arther \
     also reveals the original colors as produced by the generative AI.')
 
     st.sidebar.button('Start session', key='start_session',
                       type="primary", on_click=start_session)
 
-    message("Welcome to Arther! Your own ai-powered personalized paint book!")
+    message("Welcome to Arther! Your own AI-powered personalized coloring book!")
     message(
-        "To start a paint session, press the \'Start session\' button in the sidebar.")
+        "To start a coloring session, press the \'Start session\' button in the sidebar.")
 
     session_tab_names = [
         "session " + str(i+1) for i in range(len(st.session_state.session_tabs))]
