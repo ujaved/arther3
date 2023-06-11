@@ -185,12 +185,13 @@ def prompt_callback(key: str):
     cluster_centers = st.session_state.session_tabs[tab_idx].cluster_centers
     cluster_colors_hex = []
     for c in cluster_centers:
-      hex = "#{:02x}{:02x}{:02x}".format(c[0],c[1],c[2])
-      cluster_colors_hex.append(hex)
+        hex = "#{:02x}{:02x}{:02x}".format(c[0], c[1], c[2])
+        cluster_colors_hex.append(hex)
     st.session_state.session_tabs[tab_idx].messages.append(
-        {'role': 'assitant', 'content': f'To paint the sketch, select a color from the color-picker just below the image, and click on an uncolored \
-            region in the sketch. This will fill all the regions that share the color with the clicked point. \
-                The original colors are {cluster_colors_hex}'})
+        {'role': 'assistant', 'content': 'To paint the sketch, select a color from the color-picker just below the image, and click on an uncolored \
+            region in the sketch. This will fill all the regions that share the color with the clicked point.'})
+    st.session_state.session_tabs[tab_idx].messages.append(
+        {'role': 'color_options', 'content': cluster_colors_hex})
 
 
 def theme_callback(key: str):
@@ -282,9 +283,8 @@ def render_image(tab, tab_idx: int):
             color = st.color_picker('Pick A Color')
         with col2:
             st.button('Undo last stroke', key='undo')
-            if st.session_state.undo:
-                if st.session_state.session_tabs[tab_idx].in_progress:
-                    uncolor_last_region(tab_idx)
+            if st.session_state.undo and st.session_state.session_tabs[tab_idx].in_progress:
+                uncolor_last_region(tab_idx)
 
         col_progress = int(100*num_colored_regions/num_color_clusters)
         st.progress(col_progress, text=f'{col_progress}% completed')
@@ -293,9 +293,9 @@ def render_image(tab, tab_idx: int):
                 st.balloons()
 
                 # update state for next rendering
+                st.session_state.session_tabs[tab_idx].in_progress = False
                 image_clustered = Image.fromarray(
                     st.session_state.session_tabs[tab_idx].image_clustered_flattened.reshape(orig_shape))
-                st.session_state.session_tabs[tab_idx].in_progress = False
                 st.session_state.session_tabs[tab_idx].image_to_color_flattened = None
                 st.session_state.session_tabs[tab_idx].messages.append(
                     {'role': 'image', 'content': (image, image_clustered)})
@@ -308,8 +308,7 @@ def render_image(tab, tab_idx: int):
                 st.session_state.session_tabs[tab_idx].last_was_undo = False
             else:
                 color_region(
-                    st.session_state[f'{tab_idx}_coords'], tab_idx, color)
-
+                    st.session_state[f'{tab_idx}_coords'], tab_idx, color) 
 
 def render_messages(tab, session_tab_idx: int):
     for j, m in enumerate(st.session_state.session_tabs[session_tab_idx].messages):
@@ -327,6 +326,11 @@ def render_messages(tab, session_tab_idx: int):
                 op_list = st.session_state.session_tabs[session_tab_idx].prompt_options[k][1]
                 option_menu(None, op_list, on_change=prompt_callback,
                             key=f'{session_tab_idx}_{k}_prompt_options', default_index=def_idx)
+            elif m['role'] == 'color_options':
+                markdown_str = 'The original colors are '
+                for c in m['content']:
+                    markdown_str += f'<div style="color:{c};float:left">&#9632;({c})&nbsp;</div> '
+                st.markdown(markdown_str, unsafe_allow_html=True)
             else:
                 message(m['content'], is_user=True if m['role'] ==
                         'user' else False, key=f'{session_tab_idx}_{j}_chat')
