@@ -13,6 +13,8 @@ from streamlit_image_coordinates import streamlit_image_coordinates
 import random
 from langchain.llms import OpenAI
 from stability_sdk.api import Context, generation
+import time
+from st_click_detector import click_detector
 
 
 stability_engine_id = "stable-diffusion-xl-beta-v2-2-2"
@@ -134,12 +136,20 @@ def get_completions(prompt: str):
     return comps
     '''
 
+    '''
+    response = requests.post('http://localhost:8080/cluster-image',json={'image': to_be_clustered.tolist()}).json()
+    labels = np.array(response['labels'])
+    clusters = {int(k): v for k, v in response['clusters'].items()}
+    cluster_centers = np.array(response['cluster_centers'])
+    clustered_flat = np.array(response['clustered_image_flat'], dtype='uint8')
+    '''
+
 
 def load_image(prompt: str, session_tab_idx: int):
     image = getImageFromText(prompt)
     to_be_clustered = np.array(image)
-    labels, clusters, cluster_centers, clustered_flat = getKMeans(
-        to_be_clustered, 10)
+
+    labels, clusters, cluster_centers, clustered_flat = getKMeans(to_be_clustered, 10)
 
     gs_image = np.array(image.convert('L'))
     image_to_color = auto_canny(gs_image)
@@ -156,7 +166,8 @@ def load_image(prompt: str, session_tab_idx: int):
     st.session_state.session_tabs[session_tab_idx].color_labels = labels
     st.session_state.session_tabs[session_tab_idx].color_clusters = clusters
     st.session_state.session_tabs[session_tab_idx].cluster_centers = cluster_centers
-    # st.session_state.session_tabs[session_tab_idx].contours = contours
+    st.session_state.session_tabs[session_tab_idx].cluster_colors_hex = [
+        '#{:02x}{:02x}{:02x}'.format(c[0], c[1], c[2]) for c in cluster_centers]
 
     st.session_state[f'{session_tab_idx}_coords'] = None
 
@@ -179,19 +190,10 @@ def prompt_callback(key: str):
         last_selected_prompt_idx, prompt_options)
     st.session_state.session_tabs[tab_idx].messages.append(
         {'role': 'user', 'content': st.session_state[key]})
-
-    load_image(st.session_state[key], tab_idx)
-
-    cluster_centers = st.session_state.session_tabs[tab_idx].cluster_centers
-    cluster_colors_hex = []
-    for c in cluster_centers:
-        hex = "#{:02x}{:02x}{:02x}".format(c[0], c[1], c[2])
-        cluster_colors_hex.append(hex)
     st.session_state.session_tabs[tab_idx].messages.append(
         {'role': 'assistant', 'content': 'To color the sketch, select a color from the color-picker just below the image, and click on an uncolored \
             region in the sketch. This will fill all the regions that share the color with the clicked point.'})
-    st.session_state.session_tabs[tab_idx].messages.append(
-        {'role': 'color_options', 'content': cluster_colors_hex})
+    load_image(st.session_state[key], tab_idx)
 
 
 def theme_callback(key: str):
@@ -265,6 +267,11 @@ def color_region(coords, tab_idx, hex_color):
 def render_image(tab, tab_idx: int):
     if st.session_state.session_tabs[tab_idx].image_to_color_flattened is None:
         return
+
+    color_selector_prefix = """
+        <div style='display: flex; flex-direction: column; align-items: center;'>
+            <div style='display: flex; justify-content: start;'> \n"""
+    color_selector_suffix = """</div>\n</div>"""
     with tab:
         image_to_color_flattened = st.session_state.session_tabs[tab_idx].image_to_color_flattened
         orig_shape = st.session_state.session_tabs[tab_idx].orig_shape
@@ -280,18 +287,20 @@ def render_image(tab, tab_idx: int):
 
         col1, col2 = st.columns(2)
         with col1:
-            color = st.color_picker('Pick A Color')
+            for c in st.session_state.session_tabs[tab_idx].cluster_colors_hex:
+                color_selector_prefix += f"<a href='#' id='{c}' style='background-color: {c}; width: 25px; height: 25px; margin: 5px; display: flex; flex-wrap: wrap; border-radius: 5px; justify-content: center; align-items: stretch;'></a>\n"
+            color = click_detector(color_selector_prefix+color_selector_suffix)
         with col2:
-            st.button('Undo last stroke', key='undo')
-            if st.session_state.undo and st.session_state.session_tabs[tab_idx].in_progress:
+            st.button('Undo last stroke', key=f'undo_{tab_idx}')
+            if st.session_state[f'undo_{tab_idx}'] and st.session_state.session_tabs[tab_idx].in_progress:
                 uncolor_last_region(tab_idx)
 
         col_progress = int(100*num_colored_regions/num_color_clusters)
         st.progress(col_progress, text=f'{col_progress}% completed')
         if col_progress >= 100:
+            st.balloons()
+            time.sleep(2)
             if st.session_state.session_tabs[tab_idx].in_progress:
-                st.balloons()
-
                 # update state for next rendering
                 st.session_state.session_tabs[tab_idx].in_progress = False
                 image_clustered = Image.fromarray(
@@ -301,6 +310,7 @@ def render_image(tab, tab_idx: int):
                     {'role': 'image', 'content': (image, image_clustered)})
                 st.session_state.session_tabs[tab_idx].messages.append(
                     {'role': 'assistant', 'content': congrats_msg})
+
                 st.experimental_rerun()
 
         elif st.session_state[f'{tab_idx}_coords']:
@@ -308,7 +318,8 @@ def render_image(tab, tab_idx: int):
                 st.session_state.session_tabs[tab_idx].last_was_undo = False
             else:
                 color_region(
-                    st.session_state[f'{tab_idx}_coords'], tab_idx, color) 
+                    st.session_state[f'{tab_idx}_coords'], tab_idx, color)
+
 
 def render_messages(tab, session_tab_idx: int):
     for j, m in enumerate(st.session_state.session_tabs[session_tab_idx].messages):
@@ -326,11 +337,6 @@ def render_messages(tab, session_tab_idx: int):
                 op_list = st.session_state.session_tabs[session_tab_idx].prompt_options[k][1]
                 option_menu(None, op_list, on_change=prompt_callback,
                             key=f'{session_tab_idx}_{k}_prompt_options', default_index=def_idx)
-            elif m['role'] == 'color_options':
-                markdown_str = 'The original colors are '
-                for c in m['content']:
-                    markdown_str += f'<div style="color:{c};float:left">&#9632;({c})&nbsp;</div> '
-                st.markdown(markdown_str, unsafe_allow_html=True)
             else:
                 message(m['content'], is_user=True if m['role'] ==
                         'user' else False, key=f'{session_tab_idx}_{j}_chat')

@@ -16,6 +16,7 @@ streamlit-chat = "*"
 streamlit_option_menu = "*"
 langchain = "*"
 stability-sdk = "*"
+st_click_detector = "*"
 
 [dev-packages]
 
