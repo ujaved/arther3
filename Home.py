@@ -317,6 +317,9 @@ def render_image(tab, tab_idx: int):
             if st.session_state.session_tabs[tab_idx].last_was_undo:
                 st.session_state.session_tabs[tab_idx].last_was_undo = False
             else:
+                if not color:
+                    st.warning('Please select a color.')
+                    st.stop()
                 color_region(
                     st.session_state[f'{tab_idx}_coords'], tab_idx, color)
 
